@@ -172,15 +172,15 @@
       overflow: hidden;
     }
 
-    /* CORREGIDO: Dark mode coherente con marco institucional */
+    /* CORREGIDO: Footer siempre en blanco */
     body.dark-mode .hero-banner {
-      background: #0b1220;
-      border-color: var(--border);
+      background: #FFFFFF;
+      border-color: #E5E7EB;
     }
 
     .hero-image {
       width: 100%;
-      height: 138px;
+      height: 166px;
       object-fit: contain;
       object-position: center;
       display: block;
@@ -194,7 +194,7 @@
 
     @media (max-width: 640px) {
       .hero-image { 
-        height: 92px;
+        height: 110px;
         padding: var(--space-sm);
       }
     }
@@ -306,7 +306,7 @@
     }
 
     .fondo-logo-ministerio {
-      height: 69px;
+      height: 83px;
       width: auto;
       max-width: 100%;
       object-fit: contain;
@@ -337,7 +337,7 @@
       }
       
       .fondo-logo-ministerio {
-        height: 58px;
+        height: 70px;
         padding: 6px 10px;
       }
     }
@@ -359,7 +359,7 @@
       }
       
       .fondo-logo-ministerio {
-        height: 51px;
+        height: 61px;
         padding: 6px 8px;
       }
     }
@@ -428,13 +428,9 @@
     }
 
     .brand-logo {
-      width: 64px;
-      height: 64px;
+      width: 77px;
+      height: 77px;
       object-fit: contain;
-      border: 1px solid var(--border);
-      background: var(--bg-primary);
-      padding: 8px;
-      box-shadow: var(--shadow-1);
       flex-shrink: 0;
     }
 
@@ -479,9 +475,8 @@
 
     @media (max-width: 640px) {
       .brand-logo { 
-        width: 55px;
-        height: 55px;
-        padding: 6px; 
+        width: 66px;
+        height: 66px;
       }
       .brand-name { 
         font-size: 12px; 
@@ -548,8 +543,8 @@
     }
 
     .provider img {
-      width: 83px;
-      height: 83px;
+      width: 100px;
+      height: 100px;
       object-fit: contain;
       border-radius: 0;
       border: 1px solid var(--border);
@@ -581,8 +576,8 @@
         padding: var(--space-sm);
       }
       .provider img { 
-        width: 74px;
-        height: 74px;
+        width: 89px;
+        height: 89px;
       }
       .provider strong {
         font-size: 14px;
@@ -2181,9 +2176,9 @@
     // ═══════════════════════════════════════════════════════════════
     let UPDATED_AT = "2026-02-10 10:30";
     let COURSES = [
-      { id: "F241674AA", title: "Transformación digital", category: "Comercio Y Marketing", modality: "Online", startDate: "2026-03-16", status: "open", url: "https://grupodaboconsulting.com/curso/transformacion-digital", info: "Herramientas digitales para negocio.", hours: 60, _haystack: "transformacion digital comercio y marketing online f241674aa herramientas digitales para negocio" },
-      { id: "F241677AA", title: "Prestashop avanzado", category: "Comercio Y Marketing", modality: "Online", startDate: "2026-03-16", status: "open", url: "https://grupodaboconsulting.com/curso/prestashop", info: "Tienda online profesional.", hours: 40, _haystack: "prestashop avanzado comercio y marketing online f241677aa tienda online profesional" },
-      { id: "F241694AA", title: "Técnicas de venta", category: "Comercio Y Marketing", modality: "Presencial", startDate: "2026-03-16", status: "wait", url: "https://grupodaboconsulting.com/curso/ventas", info: "Cierre y fidelización.", hours: 50, _haystack: "tecnicas de venta comercio y marketing presencial f241694aa cierre y fidelizacion" },
+      { id: "F241674AA", title: "Transformación digital", category: "Comercio y Marketing", modality: "Online", startDate: "2026-03-16", status: "open", url: "https://grupodaboconsulting.com/curso/transformacion-digital", info: "Herramientas digitales para negocio.", hours: 60, _haystack: "transformacion digital comercio y marketing online f241674aa herramientas digitales para negocio" },
+      { id: "F241677AA", title: "Prestashop avanzado", category: "Comercio y Marketing", modality: "Online", startDate: "2026-03-16", status: "open", url: "https://grupodaboconsulting.com/curso/prestashop", info: "Tienda online profesional.", hours: 40, _haystack: "prestashop avanzado comercio y marketing online f241677aa tienda online profesional" },
+      { id: "F241694AA", title: "Técnicas de venta", category: "Comercio y Marketing", modality: "Presencial", startDate: "2026-03-16", status: "wait", url: "https://grupodaboconsulting.com/curso/ventas", info: "Cierre y fidelización.", hours: 50, _haystack: "tecnicas de venta comercio y marketing presencial f241694aa cierre y fidelizacion" },
       { id: "F241686AA", title: "Talento digital", category: "Servicios", modality: "Online", startDate: "2026-03-02", status: "open", url: "https://grupodaboconsulting.com/curso/talento-digital", info: "Competencias digitales.", hours: 45, _haystack: "talento digital servicios online f241686aa competencias digitales" },
       { id: "BIOCIDAS", title: "Biocidas profesional", category: "Servicios", modality: "Mixta", startDate: "2026-02-23", status: "closed", url: "https://grupodaboconsulting.com/curso/biocidas", info: "Protocolos de seguridad.", hours: 80, _haystack: "biocidas profesional servicios mixta biocidas protocolos de seguridad" }
     ];
@@ -2605,7 +2600,7 @@
           const actions = el("div", { className: "actions" });
           actions.appendChild(el("a", {
             className: "linkBtn primary",
-            href: c.url || "#",
+            href: safeURL(c.url),
             textContent: "Ver ficha oficial",
             target: "_blank",
             rel: "noopener noreferrer",
@@ -2681,7 +2676,7 @@
           
           const linkVer = document.createElement("a");
           linkVer.className = "linkBtn primary";
-          linkVer.href = c.url || "#";
+          linkVer.href = safeURL(c.url);
           linkVer.textContent = "Ficha";
           linkVer.target = "_blank";
           linkVer.rel = "noopener noreferrer";
@@ -2742,6 +2737,7 @@
       const toggleBtn = $("#toggleView");
       toggleBtn.textContent = (state.view === "cards") ? "Ver tabla" : "Ver tarjetas";
       toggleBtn.setAttribute("aria-pressed", state.view === "table");
+      toggleBtn.setAttribute("aria-controls", state.view === "cards" ? "tableView" : "cardsView");
 
       if (state.view === "cards") {
         renderCards(items);
@@ -2932,7 +2928,7 @@
         let updatedValue = "";
         const seenIds = new Set();
 
-        for (const r of rows) {
+        for (const r of validRows) {
           const title = (r[iTitle] || "").trim();
           if (!title) continue;
 
