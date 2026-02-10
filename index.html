@@ -1759,7 +1759,7 @@
 
     .notice__image {
       width: 100%;
-      max-width: 200px;
+      max-width: 120px;
       height: auto;
       border: 1px solid var(--border);
       border-radius: 0;
@@ -1840,6 +1840,43 @@
     .card:nth-child(2) { animation-delay: 0.1s; }
     .card:nth-child(3) { animation-delay: 0.15s; }
     .card:nth-child(4) { animation-delay: 0.2s; }
+    
+    
+    
+    
+    /* Enlaces institucionales dentro de textos */
+.notice__text-block a,
+.legal a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(30, 58, 138, 0.25);
+  transition: all 150ms ease;
+}
+
+.notice__text-block a:hover,
+.legal a:hover {
+  border-bottom-color: var(--primary);
+}
+
+.notice__text-block a:focus-visible,
+.legal a:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Dark mode coherente */
+body.dark-mode .notice__text-block a,
+body.dark-mode .legal a {
+  color: var(--primary-light);
+  border-bottom-color: rgba(59, 130, 246, 0.35);
+}
+
+body.dark-mode .notice__text-block a:hover,
+body.dark-mode .legal a:hover {
+  border-bottom-color: var(--primary-light);
+}
+
   </style>
 </head>
 
@@ -2006,10 +2043,17 @@
         <div class="notice__details-content">
           <div class="notice__text-block" tabindex="-1">
             <p>
-              <strong>Herrera Hoy</strong> actúa como <strong>medio informativo</strong>.
-              No realiza intermediación, gestión de inscripciones ni selección de alumnado.
-              Toda tramitación corresponde a <strong>Grupo Dabo</strong>.
-            </p>
+<strong>Herrera Hoy</strong> actúa como <strong>medio informativo</strong>.
+En ningún caso realiza intermediación, gestión de inscripciones ni selección de alumnado.
+Toda tramitación corresponde a 
+<strong>
+  <a href="https://grupodaboconsulting.com/" 
+     target="_blank" 
+     rel="noopener noreferrer">
+     Grupo Dabo
+  </a>
+</strong>.
+
             <p>
               La admisión está sujeta a los requisitos del programa, disponibilidad de plazas y criterios de priorización aplicables en cada convocatoria.
               Con carácter general, pueden priorizarse personas empleadas en el sector relacionado con la formación (si cumplen requisitos).
