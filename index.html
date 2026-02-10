@@ -1,339 +1,3 @@
-Lo he leído completo: **está muy cerca de 9,5 real** (y en algunas piezas ya lo está). Te dejo una **auditoría “quirúrgica”**: 10 mejoras pequeñas pero muy potentes (sin cambiar tu estética ni meter frameworks), con **parches exactos**.
-
----
-
-## 1) Bug importante: la búsqueda no funciona (ahora mismo)
-
-En `debouncedSearch()` haces:
-
-```js
-state.q = normalize(value);
-```
-
-Pero en `renderResultsBar()` muestras:
-
-```js
-Búsqueda: "${state.q}"
-```
-
-Resultado: enseñas la búsqueda en minúsculas sin acentos (feísimo) y, peor: **cuando limpias** haces `state.q=""` pero si el usuario vuelve a escribir, sigues guardando normalizado (ok para filtrar), pero te falta **guardar también el texto original** para mostrarlo bien.
-
-✅ Arreglo: guarda dos campos: `qRaw` (para UI) y `q` (normalizado para filtro).
-
-**Patch:**
-
-```js
-const state = { q: "", qRaw: "", cat: "", mod: "", upcoming: true, sort: "dateAsc", chip: "", view: "cards" };
-
-// ...
-const debouncedSearch = debounce((value) => {
-  state.qRaw = value;
-  state.q = normalize(value);
-  render();
-}, 150);
-```
-
-Y en `clearAllFilters`:
-
-```js
-state.q = "";
-state.qRaw = "";
-$("#q").value = "";
-```
-
-Y en `renderResultsBar`:
-
-```js
-if (state.qRaw.trim()) parts.push(`Búsqueda: "${state.qRaw.trim()}"`);
-```
-
----
-
-## 2) “Solo cursos próximos” aparece aunque sea el estado por defecto
-
-Ahora mismo, si `upcoming=true` siempre añades “Solo cursos próximos” como filtro activo. Eso **ensucia** el resumen y la gente mayor lo interpreta como “he activado algo raro”.
-
-✅ Mejor: trata `upcoming=true` como **comportamiento por defecto**, y solo muéstralo si el usuario cambia a “Todos”.
-
-**Patch en renderResultsBar:**
-
-```js
-// en vez de: if (state.upcoming) parts.push("Solo cursos próximos");
-if (!state.upcoming) parts.push("Mostrando: Todos (incluye cerrados y pasados)");
-```
-
-Y en `applyFilters`, si quieres mantener “Solo próximos” como default (perfecto), se queda como está.
-
----
-
-## 3) Aria-live en resultsBar: mejor no “live” en un contenedor con botones
-
-Tienes:
-
-```html
-<div class="resultsBar" ... role="region" aria-live="polite">
-```
-
-Eso puede provocar lecturas raras (por cambios de DOM dentro del contenedor que incluye un botón).
-
-✅ Mejor: **quita aria-live del contenedor** y deja aria-live solo en un `span` oculto (o en tu `announcer` actual).
-
-**Patch HTML:**
-
-```html
-<div class="resultsBar" role="region" aria-label="Resumen de resultados y filtros activos">
-```
-
-Y añade un live “solo texto”:
-
-```html
-<span id="resultsLive" class="sr-only" aria-live="polite" aria-atomic="true"></span>
-```
-
-Luego en `renderResultsBar(items)`:
-
-```js
-const live = document.getElementById("resultsLive");
-if (live) live.textContent = `${items.length} resultados. ${parts.length ? parts.join(". ") : "Sin filtros activos."}`;
-```
-
----
-
-## 4) “Limpiar todo” debería desactivarse si no hay nada que limpiar
-
-Ahora siempre está activo. A nivel 9,5, el botón debe reflejar estado.
-
-✅ Patch:
-
-```js
-function hasActiveFilters() {
-  return !!(state.q || state.cat || state.mod || state.chip || !state.upcoming);
-}
-
-function renderResultsBar(items) {
-  // ...
-  const clearBtn = $("#clearAllFilters");
-  if (clearBtn) {
-    const active = hasActiveFilters();
-    clearBtn.disabled = !active;
-    clearBtn.setAttribute("aria-disabled", active ? "false" : "true");
-  }
-}
-```
-
-Y visual (opcional pero fino): añade en CSS:
-
-```css
-.btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-```
-
----
-
-## 5) Sticky bar: cuidado con el “salto” por márgenes laterales
-
-Tienes `margin: 0 var(--space-md)` en `.resultsBar`. Al ser sticky, puede “bailar” con el scroll en algunos navegadores y se nota.
-
-✅ Mejor: que la sticky bar esté “full width” dentro del wrap y que el padding interior haga el aire.
-
-**Patch CSS (sutil, sin cambiar estética):**
-
-```css
-.resultsBar {
-  margin: 0;              /* quitar márgenes */
-  border-left: 0;
-  border-right: 0;
-  padding-left: calc(var(--space-md) + 2px);
-  padding-right: calc(var(--space-md) + 2px);
-}
-@media (max-width: 640px) {
-  .resultsBar { padding-left: var(--space-sm); padding-right: var(--space-sm); }
-}
-```
-
-Esto hace que se sienta más “institucional” (barra de sistema).
-
----
-
-## 6) Tabla: el estado debería tener microcopy igual que en cards
-
-En tabla pones `ABIERTO/ESPERA/CERRADO`, pero no el “Plazas disponibles / Lista de espera…”.
-
-✅ Patch rápido en `renderTable`:
-
-```js
-const tdEstado = document.createElement("td");
-const strong = document.createElement("strong");
-strong.textContent = statusLabel(c.status);
-const sub = document.createElement("div");
-sub.className = "small";
-sub.textContent = statusSubLabel(c.status);
-tdEstado.appendChild(strong);
-tdEstado.appendChild(sub);
-```
-
----
-
-## 7) El filtro por chip es “demasiado mágico”
-
-Filtras por:
-
-```js
-normalize(`${c.category} ${c.modality}`).includes(t)
-```
-
-Eso hace que chip “Servicios” afecte también modalidad si coincidiera en texto raro, etc. Funciona, pero es poco explícito.
-
-✅ Mejor: chips de modalidad actúan sobre modalidad, chips de categoría sobre categoría.
-
-**Patch simple:**
-
-```js
-function applyChipFilter(out) {
-  if (!state.chip) return out;
-  const chip = state.chip;
-
-  if (["Online","Presencial","Mixta"].includes(chip)) {
-    return out.filter(c => c.modality === chip);
-  }
-  // si no es modalidad, lo tratamos como categoría
-  return out.filter(c => (c.category || "") === chip);
-}
-```
-
-Y dentro de `applyFilters`:
-
-```js
-out = applyChipFilter(out);
-```
-
-(Esto sube bastante el nivel de “sensación de producto serio”.)
-
----
-
-## 8) Persistir filtros en URL (nivel 9.5 real)
-
-Esto es MUY institucional: si alguien comparte enlace, abre con los filtros aplicados.
-
-✅ Sin librerías: `URLSearchParams`.
-
-**Añade:**
-
-```js
-function syncStateToURL() {
-  const p = new URLSearchParams();
-  if (state.qRaw?.trim()) p.set("q", state.qRaw.trim());
-  if (state.cat) p.set("cat", state.cat);
-  if (state.mod) p.set("mod", state.mod);
-  if (state.chip) p.set("chip", state.chip);
-  if (!state.upcoming) p.set("upcoming", "0");
-  if (state.sort && state.sort !== "dateAsc") p.set("sort", state.sort);
-  if (state.view && state.view !== "cards") p.set("view", state.view);
-  history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
-}
-
-function hydrateStateFromURL() {
-  const p = new URLSearchParams(location.search);
-  const q = p.get("q") || "";
-  state.qRaw = q;
-  state.q = normalize(q);
-  state.cat = p.get("cat") || "";
-  state.mod = p.get("mod") || "";
-  state.chip = p.get("chip") || "";
-  state.upcoming = (p.get("upcoming") !== "0");
-  state.sort = p.get("sort") || "dateAsc";
-  state.view = p.get("view") || "cards";
-
-  $("#q").value = state.qRaw;
-  $("#cat").value = state.cat;
-  $("#mod").value = state.mod;
-  $("#sort").value = state.sort;
-  $("#upcoming").value = state.upcoming ? "1" : "0";
-}
-```
-
-Y al final de `loadCoursesFromTSV()` antes de `render()`:
-
-```js
-hydrateStateFromURL();
-render();
-```
-
-Y al final de `render()`:
-
-```js
-syncStateToURL();
-```
-
----
-
-## 9) Accesibilidad: botón “Más info” debería devolver foco al cerrar
-
-Ahora abre/cierra pero no devuelve el foco a un sitio lógico.
-
-✅ Patch: cuando cierres, vuelve el foco al botón; cuando abras, al primer párrafo.
-
-```js
-toggleNoticeBtn.addEventListener("click", () => {
-  const isExpanded = toggleNoticeBtn.getAttribute("aria-expanded") === "true";
-  if (isExpanded) {
-    noticeDetails.classList.add("hidden");
-    toggleNoticeBtn.setAttribute("aria-expanded", "false");
-    toggleNoticeBtn.focus();
-  } else {
-    noticeDetails.classList.remove("hidden");
-    toggleNoticeBtn.setAttribute("aria-expanded", "true");
-    const firstP = noticeDetails.querySelector("p");
-    (firstP || noticeDetails).focus?.();
-    announce("Información adicional desplegada");
-  }
-});
-```
-
-Y para que `p` sea enfocable, puedes añadir `tabindex="-1"` al contenedor `.notice__text-block` o al primer `p`.
-
----
-
-## 10) Microdetalle: “Actualizado” en el header y `UPDATED_AT` (consistencia)
-
-`UPDATED_AT` viene como `"2026-02-10 10:30"` (formato raro). Cuando lo sacas del TSV sí lo formateas con `toLocaleString`.
-
-✅ Mejor: normaliza siempre a un formato español visible.
-
-**Patch simple:**
-
-```js
-function formatUpdatedAt(raw) {
-  const v = String(raw || "").trim();
-  if (!v) return "—";
-  // Si ya viene tipo "dd/mm/yyyy, hh:mm"
-  if (v.includes("/")) return v;
-  // Si viene "yyyy-mm-dd hh:mm"
-  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
-  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
-  return v;
-}
-```
-
-Y en `render()`:
-
-```js
-$("#updatedText").textContent = `Actualizado: ${formatUpdatedAt(UPDATED_AT)}`;
-```
-
----
-
-# Conclusión (rápida y honesta)
-
-Tu base está **muy fuerte**. Si aplicas **(1), (2), (3), (4), (6) y (8)**, el salto de “bonito” a “producto institucional premium” es inmediato.
-
-Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
-
-* resaltado de coincidencias en título/desc,
-* “Guardar/Restaurar filtros” (localStorage),
-* y un mini sistema de “recomendados” (próximos 7 días) sin duplicar lógica.
 <!doctype html>
 <html lang="es">
 <head>
@@ -344,7 +8,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
   <style>
     /* ═══════════════════════════════════════════════════════════════
-       SISTEMA DE DISEÑO HERRERA HOY - INSTITUCIONAL PREMIUM
+       SISTEMA DE DISEÑO HERRERA HOY - INSTITUCIONAL PREMIUM V9.5 REAL
        ═══════════════════════════════════════════════════════════════ */
     :root {
       /* Colores institucionales LIGHT */
@@ -397,7 +61,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       --space-2xl: 32px;
       --space-3xl: 48px;
       
-      /* Tipografía MEJORADA */
+      /* Tipografía */
       --font-size-xs: 12px;
       --font-size-sm: 14px;
       --font-size-base: 15px;
@@ -411,14 +75,16 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       --font-weight-bold: 700;
       --font-weight-black: 900;
       
-      /* Sombras mínimas */
+      /* Sombras */
       --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
       --shadow-2: 0 2px 4px 0 rgba(0, 0, 0, 0.06);
       --shadow-3: 0 4px 8px 0 rgba(0, 0, 0, 0.08);
+      --shadow-sticky: 0 2px 8px 0 rgba(0, 0, 0, 0.12);
       
       /* Transiciones */
       --transition-subtle: 150ms ease-out;
-      --transition-base: 180ms ease-out;
+      --transition-base: 200ms ease-out;
+      --transition-smooth: 300ms cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -450,6 +116,20 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
       --shadow-2: 0 2px 4px 0 rgba(0, 0, 0, 0.4);
       --shadow-3: 0 4px 8px 0 rgba(0, 0, 0, 0.5);
+      --shadow-sticky: 0 4px 12px 0 rgba(0, 0, 0, 0.6);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       SCROLL SUAVE
+       ═══════════════════════════════════════════════════════════════ */
+    html {
+      scroll-behavior: smooth;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -519,7 +199,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       DARK MODE TOGGLE - CUADRADO
+       DARK MODE TOGGLE
        ═══════════════════════════════════════════════════════════════ */
     .theme-toggle {
       position: fixed;
@@ -543,6 +223,11 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       transform: scale(1.05);
       box-shadow: 0 6px 12px rgba(0,0,0,0.15);
       border-color: var(--border-medium);
+    }
+
+    .theme-toggle:focus-visible {
+      outline: 3px solid var(--primary);
+      outline-offset: 2px;
     }
 
     .theme-toggle svg {
@@ -694,7 +379,6 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       .module { margin: var(--space-md) var(--space-sm); }
     }
 
-    /* Header */
     .module__top {
       padding: var(--space-lg);
       display: grid;
@@ -726,7 +410,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     .titleBlock { min-width: 0; }
 
     /* ═══════════════════════════════════════════════════════════════
-       BRANDLINE PRO
+       BRANDLINE
        ═══════════════════════════════════════════════════════════════ */
     .brandline {
       display: flex;
@@ -819,7 +503,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       color: var(--text-secondary);
       font-size: var(--font-size-sm);
       max-width: 72ch;
-      line-height: 1.55; /* MEJORADO */
+      line-height: 1.55;
     }
 
     @media (max-width: 640px) {
@@ -844,7 +528,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       max-width: 100%;
       text-decoration: none;
       color: inherit;
-      transition: all 0.2s ease;
+      transition: all var(--transition-base);
     }
 
     .provider:hover {
@@ -853,8 +537,8 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       transform: translateY(-1px);
     }
 
-    .provider:focus {
-      outline: 2px solid var(--primary);
+    .provider:focus-visible {
+      outline: 3px solid var(--primary);
       outline-offset: 2px;
     }
 
@@ -957,11 +641,11 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       cursor: pointer;
       user-select: none;
       text-decoration: none;
-      transition: all var(--transition-subtle);
+      transition: all var(--transition-base);
       min-height: 36px;
     }
 
-    .btn:hover {
+    .btn:hover:not(:disabled) {
       background: var(--bg-secondary);
       border-color: var(--border-medium);
     }
@@ -977,7 +661,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       border-color: var(--primary);
     }
 
-    .btn.primary:hover {
+    .btn.primary:hover:not(:disabled) {
       background: var(--primary-dark);
       border-color: var(--primary-dark);
     }
@@ -988,15 +672,21 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       border-color: var(--danger-border);
     }
 
-    .btn.danger:hover {
+    .btn.danger:hover:not(:disabled) {
       background: var(--danger-bg);
       border-color: var(--danger);
+    }
+
+    /* v9.5 REAL - Estado deshabilitado */
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
     }
 
     .hidden { display: none !important; }
 
     /* ═══════════════════════════════════════════════════════════════
-       SECTION HEADERS - BLOQUES CLAROS
+       SECTION HEADERS
        ═══════════════════════════════════════════════════════════════ */
     .sectionHead {
       display: flex;
@@ -1033,14 +723,14 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       CONTROLES - MÁS LEGIBLES
+       CONTROLES
        ═══════════════════════════════════════════════════════════════ */
     .module__divider { border-top: 1px solid var(--border); }
 
     .controls {
       padding: var(--space-md);
       display: grid;
-      gap: 10px; /* MEJORADO */
+      gap: 10px;
       background: var(--bg-primary);
     }
 
@@ -1061,14 +751,19 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       background: var(--bg-secondary);
       border: 1px solid var(--border);
       border-radius: 0;
-      padding: 10px; /* MEJORADO */
+      padding: 10px;
       display: flex;
       align-items: center;
       gap: var(--space-sm);
+      transition: border-color var(--transition-subtle);
+    }
+
+    .field:focus-within {
+      border-color: var(--primary);
     }
 
     .field label {
-      font-size: 12px; /* MEJORADO */
+      font-size: 12px;
       color: var(--text-secondary);
       white-space: nowrap;
       font-weight: var(--font-weight-bold);
@@ -1081,12 +776,12 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       outline: none;
       background: transparent;
       color: var(--text-primary);
-      font-size: 14px; /* MEJORADO */
+      font-size: 14px;
       font-family: inherit;
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       CHIPS - CON TÍTULO Y LIMPIAR
+       CHIPS ACCESIBLES
        ═══════════════════════════════════════════════════════════════ */
     .chipsWrap {
       background: var(--bg-primary);
@@ -1112,7 +807,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     .chips {
       padding: 0 var(--space-md) var(--space-md);
       display: flex;
-      gap: 8px; /* MEJORADO */
+      gap: 8px;
       flex-wrap: wrap;
     }
 
@@ -1134,18 +829,30 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       font-size: var(--font-size-xs);
       cursor: pointer;
       user-select: none;
-      transition: all var(--transition-subtle);
+      transition: all var(--transition-base);
       font-weight: var(--font-weight-semibold);
+      font-family: inherit;
     }
 
-    .chip:hover {
+    .chip:hover:not(:disabled) {
       background: rgba(37, 99, 235, 0.12);
+      transform: translateY(-1px);
     }
 
-    .chip.active {
+    .chip:focus-visible {
+      outline: 3px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .chip[aria-pressed="true"] {
       background: var(--primary);
       color: #fff;
       border-color: var(--primary);
+    }
+
+    .chip:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
     }
 
     body.dark-mode .chip {
@@ -1154,24 +861,32 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       border-color: rgba(59, 130, 246, 0.3);
     }
 
-    body.dark-mode .chip.active {
+    body.dark-mode .chip[aria-pressed="true"] {
       background: var(--primary-light);
       color: #0F172A;
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       BARRA DE RESULTADOS
+       BARRA DE RESULTADOS STICKY (v9.5 REAL - sin márgenes laterales)
        ═══════════════════════════════════════════════════════════════ */
     .resultsBar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 12px 14px;
-      margin: 0 var(--space-md);
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: 0;
+      padding: 12px calc(var(--space-md) + 2px);
+      margin: 0;
+      background: var(--bg-elevated);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-left: 0;
+      border-right: 0;
+      box-shadow: var(--shadow-sticky);
+      backdrop-filter: blur(8px);
+      transition: all var(--transition-smooth);
     }
 
     .resultsBar strong {
@@ -1179,12 +894,44 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       font-weight: var(--font-weight-bold);
     }
 
+    .resultsBar__left {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .resultsBar__count {
+      font-size: var(--font-size-base);
+      font-weight: var(--font-weight-bold);
+      color: var(--text-primary);
+    }
+
+    .resultsBar__filters {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .resultsBar__right {
+      flex-shrink: 0;
+    }
+
     @media (max-width: 640px) {
       .resultsBar {
         flex-direction: column;
         align-items: flex-start;
-        margin: 0 var(--space-sm);
-        gap: 6px;
+        padding: 12px var(--space-sm);
+        gap: 10px;
+      }
+      
+      .resultsBar__right {
+        width: 100%;
+      }
+      
+      .resultsBar__right .btn {
+        width: 100%;
       }
     }
 
@@ -1225,7 +972,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
     .legal .small {
       color: var(--text-tertiary);
-      font-size: 11px;
+      font-size: 12px;
       margin-top: var(--space-xs);
     }
 
@@ -1238,7 +985,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       justify-content: flex-end;
       gap: var(--space-sm);
       color: var(--text-tertiary);
-      font-size: var(--font-size-xs);
+      font-size: 12px;
     }
 
     @media (max-width: 640px) {
@@ -1251,7 +998,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
     .small {
       color: var(--text-muted);
-      font-size: 11px;
+      font-size: 12px;
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -1300,8 +1047,17 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       }
     }
 
+    .grid.fade-in {
+      animation: gridFadeIn 0.4s ease-out;
+    }
+
+    @keyframes gridFadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     /* ═══════════════════════════════════════════════════════════════
-       CARDS - MEJORADAS
+       CARDS
        ═══════════════════════════════════════════════════════════════ */
     .card {
       position: relative;
@@ -1312,8 +1068,8 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       padding: 14px 14px 12px 20px;
       display: flex;
       flex-direction: column;
-      gap: 12px; /* MEJORADO */
-      transition: box-shadow 0.15s ease;
+      gap: 12px;
+      transition: box-shadow var(--transition-base);
     }
 
     .card::before {
@@ -1322,8 +1078,9 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       left: 0;
       top: 0;
       bottom: 0;
-      width: 6px; /* MEJORADO */
+      width: 6px;
       background: var(--border-strong);
+      transition: background var(--transition-base);
     }
 
     .card[data-status="open"]::before { background: var(--ok); }
@@ -1365,7 +1122,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     .courseMetaLine {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px; /* MEJORADO */
+      gap: 8px;
       align-items: center;
       font-size: 12px;
     }
@@ -1382,22 +1139,21 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       gap: 4px;
       border: 1px solid var(--border);
       background: var(--bg-secondary);
-      padding: 5px 9px; /* MEJORADO */
+      padding: 5px 9px;
       border-radius: 999px;
       font-weight: 600;
       color: var(--text-secondary);
-      font-size: 11px;
+      font-size: 12px;
       white-space: nowrap;
     }
 
     @media (max-width: 640px) {
       .pillMeta {
-        font-size: 10px;
+        font-size: 11px;
         padding: 4px 7px;
       }
     }
 
-    /* Categoría destacada */
     .pillCategory {
       background: rgba(37, 99, 235, 0.08);
       border-color: rgba(37, 99, 235, 0.2);
@@ -1419,9 +1175,9 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     .card .desc {
-      font-size: 13px; /* MEJORADO */
+      font-size: 13px;
       color: var(--text-secondary);
-      line-height: 1.6; /* MEJORADO */
+      line-height: 1.6;
       margin: 0;
     }
 
@@ -1461,11 +1217,13 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       background: transparent;
       color: #128C7E;
       border-color: rgba(18, 140, 126, 0.35);
+      transition: all var(--transition-base);
     }
 
     a.linkBtn.whatsapp-btn:hover {
       background: rgba(18, 140, 126, 0.08);
       border-color: rgba(18, 140, 126, 0.6);
+      transform: translateY(-1px);
     }
 
     body.dark-mode a.linkBtn.whatsapp-btn {
@@ -1498,10 +1256,25 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     .card .badge {
-      font-size: 9px; /* MEJORADO - más pequeño */
+      font-size: 9px;
       padding: 5px 9px;
       font-weight: 700;
       align-self: flex-start;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .badge__status {
+      display: block;
+    }
+
+    .badge__label {
+      display: block;
+      font-size: 8px;
+      opacity: 0.85;
+      font-weight: 600;
     }
 
     .topRow {
@@ -1516,7 +1289,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       text-align: center;
       font-size: 9px;
       border-radius: 999px;
-      padding: 5px 9px;
+      padding: 6px 10px;
       border: 1px solid transparent;
       white-space: nowrap;
       font-weight: 800;
@@ -1528,7 +1301,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       .badge {
         min-width: 80px;
         font-size: 8px;
-        padding: 4px 7px;
+        padding: 5px 8px;
       }
     }
 
@@ -1648,8 +1421,24 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       border-bottom: none;
     }
 
+    tbody tr {
+      transition: background var(--transition-subtle);
+    }
+
     tbody tr:hover {
       background: var(--bg-secondary);
+    }
+
+    .table-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .table-actions .linkBtn {
+      padding: 5px 9px;
+      font-size: 11px;
+      min-height: 28px;
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -1790,7 +1579,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       NOTICE - MEJORADO Y CLARO
+       NOTICE
        ═══════════════════════════════════════════════════════════════ */
     .notice {
       margin: 0 var(--space-md) var(--space-md);
@@ -1813,7 +1602,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       padding: var(--space-md);
       background: var(--info-bg);
       border-left: 3px solid var(--info);
-      transition: background 0.15s ease;
+      transition: background var(--transition-subtle);
     }
 
     .notice__bar:hover {
@@ -1898,7 +1687,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       content: ' ▼';
       font-size: 10px;
       margin-left: 4px;
-      transition: transform 0.2s ease;
+      transition: transform var(--transition-base);
       display: inline-block;
     }
 
@@ -1944,7 +1733,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     .notice__text-block p {
       margin: 0 0 var(--space-sm);
       font-size: var(--font-size-sm);
-      line-height: 1.65; /* MEJORADO */
+      line-height: 1.65;
       color: var(--text-secondary);
     }
 
@@ -1961,6 +1750,17 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     .notice__text-block strong {
       color: var(--text-primary);
       font-weight: var(--font-weight-bold);
+    }
+
+    /* v9.5 REAL - Para hacer el primer párrafo enfocable */
+    .notice__text-block {
+      outline: none;
+    }
+
+    .notice__text-block:focus {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 2px;
     }
 
     .notice__image {
@@ -2052,7 +1852,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 <body>
   <a class="skip-link" href="#grid">Saltar al listado de cursos</a>
 
-  <button class="theme-toggle" id="themeToggle" aria-label="Cambiar tema" title="Cambiar entre modo claro y oscuro">
+  <button class="theme-toggle" id="themeToggle" aria-label="Cambiar tema claro/oscuro" title="Cambiar entre modo claro y oscuro">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sun-icon">
       <circle cx="12" cy="12" r="5"></circle>
       <line x1="12" y1="1" x2="12" y2="3"></line>
@@ -2124,8 +1924,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           <span class="pill" title="Total de cursos visibles">
             <strong id="count">0</strong>&nbsp; cursos
           </span>
-          <button class="btn" id="toggleView" type="button" aria-pressed="false">Ver tabla</button>
-          <button class="btn danger" id="clearFilters" type="button" style="display:none;">Limpiar filtros</button>
+          <button class="btn" id="toggleView" type="button" aria-pressed="false" aria-label="Cambiar entre vista de tarjetas y vista de tabla">Ver tabla</button>
           <label class="btn primary admin-only" for="csvFile">Importar</label>
           <input id="csvFile" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" class="hidden admin-only" aria-label="Seleccionar archivo" />
         </div>
@@ -2137,28 +1936,27 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
       <div class="module__divider"></div>
 
-      <!-- BLOQUE: FILTROS -->
       <div class="sectionHead">
         <h2>Filtrar cursos</h2>
         <div class="hint">Busca por palabra, elige modalidad o categoría</div>
       </div>
 
-      <div class="controls" aria-label="Filtros">
+      <div class="controls" aria-label="Filtros de búsqueda">
         <div class="field">
           <label for="q">Buscar</label>
-          <input id="q" type="search" placeholder="Marketing, Prestashop…" autocomplete="off" />
+          <input id="q" type="search" placeholder="Marketing, Prestashop…" autocomplete="off" aria-label="Buscar cursos por palabra clave" />
         </div>
 
         <div class="field">
           <label for="cat">Categoría</label>
-          <select id="cat">
+          <select id="cat" aria-label="Filtrar por categoría">
             <option value="">Todas</option>
           </select>
         </div>
 
         <div class="field">
           <label for="mod">Modalidad</label>
-          <select id="mod">
+          <select id="mod" aria-label="Filtrar por modalidad">
             <option value="">Todas</option>
             <option>Online</option>
             <option>Presencial</option>
@@ -2168,7 +1966,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
         <div class="field">
           <label for="sort">Orden</label>
-          <select id="sort">
+          <select id="sort" aria-label="Ordenar cursos">
             <option value="dateAsc">Próximos primero</option>
             <option value="dateDesc">Lejanos primero</option>
             <option value="titleAsc">A–Z</option>
@@ -2177,27 +1975,25 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
 
         <div class="field">
           <label for="upcoming">Mostrar</label>
-          <select id="upcoming">
+          <select id="upcoming" aria-label="Mostrar cursos próximos o todos">
             <option value="1">Solo próximos</option>
             <option value="0">Todos</option>
           </select>
         </div>
       </div>
 
-      <!-- BLOQUE: ATAJOS -->
       <div class="chipsWrap">
         <div class="chipsHeader">
           <div class="chipsTitle">Atajos rápidos</div>
-          <button class="btn danger" id="clearChip" type="button" style="display:none; font-size:11px; padding:4px 8px; min-height:28px;">Limpiar</button>
+          <button class="btn danger" id="clearChip" type="button" style="display:none; font-size:11px; padding:4px 8px; min-height:28px;" aria-label="Limpiar atajo seleccionado">Limpiar</button>
         </div>
-        <div class="chips" id="chips" aria-label="Atajos"></div>
+        <div class="chips" id="chips" role="group" aria-label="Atajos rápidos de filtrado"></div>
       </div>
     </section>
 
-    <!-- AVISO MEJORADO -->
     <section class="notice" aria-label="Aviso importante">
       <div class="notice__bar">
-        <div class="notice__icon">i</div>
+        <div class="notice__icon" aria-hidden="true">i</div>
         
         <div class="notice__content-simple">
           <h3>Aviso importante</h3>
@@ -2207,14 +2003,14 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           </ul>
         </div>
 
-        <button class="btn notice__btn" type="button" id="toggleNotice" aria-expanded="false" aria-controls="noticeDetails">
+        <button class="btn notice__btn" type="button" id="toggleNotice" aria-expanded="false" aria-controls="noticeDetails" aria-label="Mostrar más información sobre inscripción">
           Más info
         </button>
       </div>
 
       <div class="notice__details hidden" id="noticeDetails">
         <div class="notice__details-content">
-          <div class="notice__text-block">
+          <div class="notice__text-block" tabindex="-1">
             <p>
               <strong>Herrera Hoy</strong> actúa como <strong>medio informativo</strong>.
               No realiza intermediación, gestión de inscripciones ni selección de alumnado.
@@ -2237,11 +2033,19 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       </div>
     </section>
 
-    <!-- BARRA DE RESULTADOS -->
-    <div class="resultsBar" aria-label="Resultados">
-      <div><strong id="resultsCountText">Mostrando — cursos</strong></div>
-      <div class="small" id="activeFiltersText">Filtros: —</div>
+    <!-- v9.5 REAL - BARRA STICKY SIN ARIA-LIVE EN CONTENEDOR -->
+    <div class="resultsBar" role="region" aria-label="Resumen de resultados y filtros activos">
+      <div class="resultsBar__left">
+        <div class="resultsBar__count" id="resultsCountText">Mostrando — cursos</div>
+        <div class="resultsBar__filters" id="activeFiltersText">Sin filtros activos</div>
+      </div>
+      <div class="resultsBar__right">
+        <button class="btn danger" id="clearAllFilters" type="button" aria-label="Limpiar todos los filtros aplicados">Limpiar todo</button>
+      </div>
     </div>
+
+    <!-- v9.5 REAL - Aria-live solo para texto -->
+    <span id="resultsLive" class="sr-only" aria-live="polite" aria-atomic="true"></span>
 
     <section id="cardsView" aria-label="Listado en tarjetas">
       <div id="grid" class="grid" tabindex="-1"></div>
@@ -2257,7 +2061,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
               <th scope="col">Inicio</th>
               <th scope="col">Modalidad</th>
               <th scope="col">Estado</th>
-              <th scope="col">Acción</th>
+              <th scope="col">Acciones</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -2269,7 +2073,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       <strong>Actualizar datos:</strong> 
       Importa CSV/TSV actualizado.
       
-      <div class="drop" id="dropZone" role="button" tabindex="0">
+      <div class="drop" id="dropZone" role="button" tabindex="0" aria-label="Zona para arrastrar archivo CSV/TSV">
         <div>
           <strong>Arrastra archivo aquí</strong>
           <div class="small">CSV o TSV con campos: id, titulo, categoria, inicio, modalidad, estado, url</div>
@@ -2286,21 +2090,13 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     // ═══════════════════════════════════════════════════════════════
     const SVG_ICONS = {
       calendar: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>',
-      
       bolt: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
-      
       tag: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>',
-      
       monitor: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>',
-      
       clock: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
-      
       whatsapp: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>',
-      
       check: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
-      
       hourglass: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v6h.01M6 18v6h.01m12.01-6v6h.01m-.01-18v6h.01M6 8a6 6 0 0 0 12 0m-12 8a6 6 0 0 0 12 0"></path></svg>',
-      
       xmark: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>'
     };
 
@@ -2385,7 +2181,8 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       { id: "BIOCIDAS", title: "Biocidas profesional", category: "Servicios", modality: "Mixta", startDate: "2026-02-23", status: "closed", url: "#", info: "Protocolos de seguridad.", hours: 80, _haystack: "biocidas profesional servicios mixta biocidas protocolos de seguridad" }
     ];
 
-    const state = { q: "", cat: "", mod: "", upcoming: true, sort: "dateAsc", chip: "", view: "cards" };
+    // v9.5 REAL - Separar qRaw (UI) y q (filtro normalizado)
+    const state = { q: "", qRaw: "", cat: "", mod: "", upcoming: true, sort: "dateAsc", chip: "", view: "cards" };
 
     const $ = (s) => document.querySelector(s);
     const el = (tag, attrs={}) => Object.assign(document.createElement(tag), attrs);
@@ -2419,6 +2216,16 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
     }
 
+    // v9.5 REAL - Formato consistente para UPDATED_AT
+    function formatUpdatedAt(raw) {
+      const v = String(raw || "").trim();
+      if (!v) return "—";
+      if (v.includes("/")) return v;
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+      if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+      return v;
+    }
+
     function isUpcoming(iso) {
       if (!iso) return true;
       const today = new Date(); 
@@ -2431,6 +2238,12 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       if (s === "open") return "ABIERTO";
       if (s === "wait") return "ESPERA";
       return "CERRADO";
+    }
+
+    function statusSubLabel(s) {
+      if (s === "open") return "Plazas disponibles";
+      if (s === "wait") return "Lista de espera";
+      return "Inscripción cerrada";
     }
 
     function daysUntil(iso) {
@@ -2455,11 +2268,16 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     function setControlsDisabled(disabled) {
-      ["#q", "#cat", "#mod", "#sort", "#upcoming", "#toggleView", "#clearFilters", "#clearChip"].forEach(sel => {
+      ["#q", "#cat", "#mod", "#sort", "#upcoming", "#toggleView", "#clearAllFilters", "#clearChip"].forEach(sel => {
         const node = $(sel);
         if (!node) return;
         node.disabled = !!disabled;
         node.setAttribute("aria-disabled", disabled ? "true" : "false");
+      });
+      
+      document.querySelectorAll('.chip').forEach(chip => {
+        chip.disabled = !!disabled;
+        chip.setAttribute("aria-disabled", disabled ? "true" : "false");
       });
     }
 
@@ -2502,13 +2320,23 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       if (cats.includes(current)) sel.value = current;
     }
 
+    // v9.5 REAL - Chips más explícitos: modalidad vs categoría
+    function applyChipFilter(out) {
+      if (!state.chip) return out;
+      const chip = state.chip;
+
+      if (["Online","Presencial","Mixta"].includes(chip)) {
+        return out.filter(c => c.modality === chip);
+      }
+      
+      return out.filter(c => (c.category || "") === chip);
+    }
+
     function applyFilters(items) {
       let out = items.slice();
 
-      if (state.chip) {
-        const t = normalize(state.chip);
-        out = out.filter(c => normalize(`${c.category} ${c.modality}`).includes(t));
-      }
+      out = applyChipFilter(out);
+      
       if (state.cat) out = out.filter(c => (c.category || "") === state.cat);
       if (state.mod) out = out.filter(c => (c.modality || "") === state.mod);
       
@@ -2545,61 +2373,116 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       try { announcer.textContent = msg; } catch(e) {}
     }
 
-    function render() {
-      $("#updatedText").textContent = `Actualizado: ${UPDATED_AT}`;
-      refreshCategorySelect();
+    // v9.5 REAL - Detectar si hay filtros activos
+    function hasActiveFilters() {
+      return !!(state.q || state.cat || state.mod || state.chip || !state.upcoming);
+    }
 
+    // v9.5 REAL - Persistencia en URL
+    function syncStateToURL() {
+      const p = new URLSearchParams();
+      if (state.qRaw?.trim()) p.set("q", state.qRaw.trim());
+      if (state.cat) p.set("cat", state.cat);
+      if (state.mod) p.set("mod", state.mod);
+      if (state.chip) p.set("chip", state.chip);
+      if (!state.upcoming) p.set("upcoming", "0");
+      if (state.sort && state.sort !== "dateAsc") p.set("sort", state.sort);
+      if (state.view && state.view !== "cards") p.set("view", state.view);
+      
+      const query = p.toString();
+      const newURL = query ? `${location.pathname}?${query}` : location.pathname;
+      history.replaceState(null, "", newURL);
+    }
+
+    function hydrateStateFromURL() {
+      const p = new URLSearchParams(location.search);
+      const q = p.get("q") || "";
+      state.qRaw = q;
+      state.q = normalize(q);
+      state.cat = p.get("cat") || "";
+      state.mod = p.get("mod") || "";
+      state.chip = p.get("chip") || "";
+      state.upcoming = (p.get("upcoming") !== "0");
+      state.sort = p.get("sort") || "dateAsc";
+      state.view = p.get("view") || "cards";
+
+      $("#q").value = state.qRaw;
+      $("#cat").value = state.cat;
+      $("#mod").value = state.mod;
+      $("#sort").value = state.sort;
+      $("#upcoming").value = state.upcoming ? "1" : "0";
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // RENDER REFACTORIZADO
+    // ═══════════════════════════════════════════════════════════════
+
+    function renderChips() {
       const chipsWrap = $("#chips");
       chipsWrap.innerHTML = "";
+      
       QUICK_CHIPS.forEach(label => {
-        const c = el("div", { className: "chip", textContent: label });
-        c.classList.toggle("active", state.chip === label);
-        c.addEventListener("click", () => {
+        const btn = document.createElement("button");
+        btn.className = "chip";
+        btn.textContent = label;
+        btn.type = "button";
+        btn.setAttribute("aria-pressed", state.chip === label ? "true" : "false");
+        btn.setAttribute("aria-label", `Filtrar por ${label}`);
+        
+        btn.addEventListener("click", () => {
           state.chip = (state.chip === label) ? "" : label;
           render();
         });
-        chipsWrap.appendChild(c);
+        
+        chipsWrap.appendChild(btn);
       });
 
-      // Botón limpiar chip
       const clearChipBtn = $("#clearChip");
       if (clearChipBtn) {
         clearChipBtn.style.display = state.chip ? "inline-flex" : "none";
       }
+    }
 
-      const items = applyFilters(COURSES);
-      $("#count").textContent = items.length;
-
-      // BARRA DE RESULTADOS
+    function renderResultsBar(items) {
       const rc = document.getElementById("resultsCountText");
-      if (rc) rc.textContent = `Mostrando ${items.length} curso${items.length !== 1 ? "s" : ""}`;
+      if (rc) rc.textContent = `Mostrando ${items.length} curso${items.length !== 1 ? 's' : ''}`;
 
       const af = document.getElementById("activeFiltersText");
       if (af) {
         const parts = [];
-        if (state.q) parts.push("búsqueda");
-        if (state.cat) parts.push(`categoría: ${state.cat}`);
-        if (state.mod) parts.push(`modalidad: ${state.mod}`);
-        if (state.chip) parts.push(`atajo: ${state.chip}`);
-        if (state.upcoming) parts.push("solo próximos");
-        af.textContent = parts.length ? `Filtros: ${parts.join(" · ")}` : "Filtros: ninguno";
+        
+        // v9.5 REAL - Mostrar qRaw (texto original)
+        if (state.qRaw && state.qRaw.trim()) parts.push(`Búsqueda: "${state.qRaw.trim()}"`);
+        if (state.cat) parts.push(`Categoría: ${state.cat}`);
+        if (state.mod) parts.push(`Modalidad: ${state.mod}`);
+        if (state.chip) parts.push(`Atajo: ${state.chip}`);
+        
+        // v9.5 REAL - Solo mostrar si NO es el default
+        if (!state.upcoming) parts.push("Mostrando: Todos (incluye cerrados y pasados)");
+        
+        af.textContent = parts.length ? parts.join(" · ") : "Sin filtros activos";
       }
 
-      // Botón limpiar filtros
-      const clearBtn = $("#clearFilters");
+      // v9.5 REAL - Aria-live separado
+      const live = document.getElementById("resultsLive");
+      if (live) {
+        const liveText = `${items.length} resultados. ${af ? af.textContent : ""}`;
+        live.textContent = liveText;
+      }
+
+      // v9.5 REAL - Deshabilitar botón "Limpiar todo" si no hay filtros
+      const clearBtn = $("#clearAllFilters");
       if (clearBtn) {
-        const hasFilters = state.q || state.cat || state.mod || state.chip || !state.upcoming;
-        clearBtn.style.display = hasFilters ? "inline-flex" : "none";
+        const active = hasActiveFilters();
+        clearBtn.disabled = !active;
+        clearBtn.setAttribute("aria-disabled", active ? "false" : "true");
       }
+    }
 
-      $("#cardsView").classList.toggle("hidden", state.view !== "cards");
-      $("#tableView").classList.toggle("hidden", state.view !== "table");
-      const toggleBtn = $("#toggleView");
-      toggleBtn.textContent = (state.view === "cards") ? "Ver tabla" : "Ver tarjetas";
-      toggleBtn.setAttribute("aria-pressed", state.view === "table");
-
+    function renderCards(items) {
       const grid = $("#grid");
       grid.innerHTML = "";
+      grid.classList.remove("fade-in");
       
       if (items.length === 0) {
         const emptyDiv = el("div", { className: "empty" });
@@ -2619,14 +2502,10 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           card.dataset.status = c.status || "closed";
 
           const header = el("div", { className: "courseHeader" });
-
           const title = el("div", { className: "courseTitle", textContent: c.title || "Sin título" });
-          
           const idLine = el("div", { className: "small", textContent: c.id ? `Ref: ${c.id}` : "" });
           
-          // Línea 1: Fecha + Modalidad + Horas
           const metaLine = el("div", { className: "courseMetaLine" });
-          
           const dateSpan = el("span", { className: "pillMeta" });
           dateSpan.appendChild(createIconSpan('calendar'));
           dateSpan.appendChild(document.createTextNode(formatDate(c.startDate)));
@@ -2644,9 +2523,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
             metaLine.appendChild(hourSpan);
           }
 
-          // Línea 2: Categoría (destacada) + Empieza pronto
           const categoryLine = el("div", { className: "courseMetaLine" });
-          
           const catSpan = el("span", { className: "pillMeta pillCategory" });
           catSpan.appendChild(createIconSpan('tag'));
           catSpan.appendChild(document.createTextNode(c.category || "—"));
@@ -2665,24 +2542,29 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           header.appendChild(metaLine);
           header.appendChild(categoryLine);
 
-          const badgeSpan = el("div", { className: `badge ${c.status || "closed"}` });
+          const badgeDiv = el("div", { className: `badge ${c.status || "closed"}` });
+          const statusSpan = el("span", { className: "badge__status" });
+          const labelSpan = el("span", { className: "badge__label", textContent: statusSubLabel(c.status) });
+          
           if (c.status === "open") {
-            badgeSpan.appendChild(createIconSpan('check'));
-            badgeSpan.appendChild(document.createTextNode(statusLabel(c.status)));
+            statusSpan.appendChild(createIconSpan('check'));
+            statusSpan.appendChild(document.createTextNode(statusLabel(c.status)));
           } else if (c.status === "wait") {
-            badgeSpan.appendChild(createIconSpan('hourglass'));
-            badgeSpan.appendChild(document.createTextNode(statusLabel(c.status)));
+            statusSpan.appendChild(createIconSpan('hourglass'));
+            statusSpan.appendChild(document.createTextNode(statusLabel(c.status)));
           } else {
-            badgeSpan.appendChild(createIconSpan('xmark'));
-            badgeSpan.appendChild(document.createTextNode(statusLabel(c.status)));
+            statusSpan.appendChild(createIconSpan('xmark'));
+            statusSpan.appendChild(document.createTextNode(statusLabel(c.status)));
           }
+          
+          badgeDiv.appendChild(statusSpan);
+          badgeDiv.appendChild(labelSpan);
 
           const top = el("div", { className: "topRow" });
           top.appendChild(header);
-          top.appendChild(badgeSpan);
+          top.appendChild(badgeDiv);
 
           const desc = el("p", { className: "desc", textContent: c.info || "—" });
-
           const divider = el("div", { className: "cardDivider" });
 
           const actions = el("div", { className: "actions" });
@@ -2691,7 +2573,8 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
             href: c.url || "#",
             textContent: "Ver ficha oficial",
             target: "_blank",
-            rel: "noopener noreferrer"
+            rel: "noopener noreferrer",
+            title: `Ver ficha oficial del curso ${c.title}`
           }));
 
           const whatsappBtn = el("a", {
@@ -2713,8 +2596,14 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
         }
         
         grid.appendChild(fragment);
+        
+        requestAnimationFrame(() => {
+          grid.classList.add("fade-in");
+        });
       }
+    }
 
+    function renderTable(items) {
       const tbody = $("#tbody");
       tbody.innerHTML = "";
       
@@ -2742,18 +2631,40 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           const tdModalidad = document.createElement("td");
           tdModalidad.textContent = c.modality || "—";
           
+          // v9.5 REAL - Estado con microcopy igual que en cards
           const tdEstado = document.createElement("td");
-          tdEstado.textContent = statusLabel(c.status);
+          const strong = document.createElement("strong");
+          strong.textContent = statusLabel(c.status);
+          const sub = document.createElement("div");
+          sub.className = "small";
+          sub.textContent = statusSubLabel(c.status);
+          tdEstado.appendChild(strong);
+          tdEstado.appendChild(sub);
           
           const tdAccion = document.createElement("td");
+          const actionsDiv = document.createElement("div");
+          actionsDiv.className = "table-actions";
+          
           const linkVer = document.createElement("a");
           linkVer.className = "linkBtn primary";
           linkVer.href = c.url || "#";
-          linkVer.textContent = "Ver ficha";
+          linkVer.textContent = "Ficha";
           linkVer.target = "_blank";
           linkVer.rel = "noopener noreferrer";
-          linkVer.title = "Ver ficha oficial del curso";
-          tdAccion.appendChild(linkVer);
+          linkVer.title = `Ver ficha oficial del curso ${c.title}`;
+          actionsDiv.appendChild(linkVer);
+          
+          const linkWhatsApp = document.createElement("a");
+          linkWhatsApp.className = "linkBtn whatsapp-btn";
+          linkWhatsApp.href = getWhatsAppLink(c.title);
+          linkWhatsApp.innerHTML = getSVG('whatsapp');
+          linkWhatsApp.target = "_blank";
+          linkWhatsApp.rel = "noopener noreferrer";
+          linkWhatsApp.title = "Consultar por WhatsApp";
+          linkWhatsApp.setAttribute("aria-label", "Consultar por WhatsApp");
+          actionsDiv.appendChild(linkWhatsApp);
+          
+          tdAccion.appendChild(actionsDiv);
           
           tr.appendChild(tdCurso);
           tr.appendChild(tdCategoria);
@@ -2777,8 +2688,36 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
         tr.appendChild(td);
         tbody.appendChild(tr);
       }
+    }
+
+    function render() {
+      $("#updatedText").textContent = `Actualizado: ${formatUpdatedAt(UPDATED_AT)}`;
+      refreshCategorySelect();
+      
+      renderChips();
+      
+      const items = applyFilters(COURSES);
+      $("#count").textContent = items.length;
+
+      renderResultsBar(items);
+
+      $("#cardsView").classList.toggle("hidden", state.view !== "cards");
+      $("#tableView").classList.toggle("hidden", state.view !== "table");
+      
+      const toggleBtn = $("#toggleView");
+      toggleBtn.textContent = (state.view === "cards") ? "Ver tabla" : "Ver tarjetas";
+      toggleBtn.setAttribute("aria-pressed", state.view === "table");
+
+      if (state.view === "cards") {
+        renderCards(items);
+      } else {
+        renderTable(items);
+      }
 
       announce(`${items.length} curso${items.length !== 1 ? 's' : ''}`);
+      
+      // v9.5 REAL - Persistir en URL
+      syncStateToURL();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -2972,14 +2911,23 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
               year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"
             });
 
-        state.cat = ""; state.mod = ""; state.q = ""; state.chip = "";
+        state.cat = ""; 
+        state.mod = ""; 
+        state.q = ""; 
+        state.qRaw = "";
+        state.chip = "";
 
+        // v9.5 REAL - Hidratar desde URL antes de render
+        hydrateStateFromURL();
         render();
         announce(`Cursos actualizados. ${mapped.length} resultados.`);
         
       } catch (err) {
         console.warn("No se pudo cargar TSV:", err);
         announce("Listado no disponible temporalmente. Mostrando datos de prueba.");
+        
+        // v9.5 REAL - Incluso con error, hidratar URL
+        hydrateStateFromURL();
         render();
         
       } finally {
@@ -2992,7 +2940,10 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     // ═══════════════════════════════════════════════════════════════
     // CONTROLES
     // ═══════════════════════════════════════════════════════════════
+    
+    // v9.5 REAL - Guardar qRaw y q
     const debouncedSearch = debounce((value) => {
+      state.qRaw = value;
       state.q = normalize(value);
       render();
     }, 150);
@@ -3002,15 +2953,24 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     $("#mod").addEventListener("change", e => { state.mod = e.target.value; render(); });
     $("#sort").addEventListener("change", e => { state.sort = e.target.value; render(); });
     $("#upcoming").addEventListener("change", e => { state.upcoming = (e.target.value === "1"); render(); });
+    
     $("#toggleView").addEventListener("click", () => { 
       state.view = (state.view === "cards") ? "table" : "cards"; 
       render(); 
-      requestAnimationFrame(focusFirstInView);
+      
+      requestAnimationFrame(() => {
+        const target = state.view === "table" ? $("#tableView") : $("#grid");
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        focusFirstInView();
+      });
     });
 
-    // LIMPIAR FILTROS
-    $("#clearFilters").addEventListener("click", () => {
+    // v9.5 REAL - Limpiar todo (resetear qRaw también)
+    $("#clearAllFilters").addEventListener("click", () => {
       state.q = "";
+      state.qRaw = "";
       state.cat = "";
       state.mod = "";
       state.chip = "";
@@ -3020,13 +2980,14 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
       $("#mod").value = "";
       $("#upcoming").value = "1";
       render();
-      showToast("Filtros limpiados", "success");
+      showToast("Todos los filtros limpiados", "success");
+      announce("Todos los filtros han sido limpiados");
     });
 
-    // LIMPIAR CHIP
     $("#clearChip").addEventListener("click", () => {
       state.chip = "";
       render();
+      announce("Atajo limpiado");
     });
 
     // ═══════════════════════════════════════════════════════════════
@@ -3151,7 +3112,11 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
           hour: "2-digit", minute: "2-digit"
         });
         
-        state.cat = ""; state.mod = ""; state.q = ""; state.chip = "";
+        state.cat = ""; 
+        state.mod = ""; 
+        state.q = ""; 
+        state.qRaw = "";
+        state.chip = "";
         render();
         
         showToast(`Importado: ${mapped.length} curso${mapped.length !== 1 ? 's' : ''}`, "success");
@@ -3163,7 +3128,7 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // NOTICE TOGGLE
+    // NOTICE TOGGLE - v9.5 REAL (devuelve foco)
     // ═══════════════════════════════════════════════════════════════
     const toggleNoticeBtn = $("#toggleNotice");
     const noticeDetails = $("#noticeDetails");
@@ -3175,9 +3140,12 @@ Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
         if (isExpanded) {
           noticeDetails.classList.add("hidden");
           toggleNoticeBtn.setAttribute("aria-expanded", "false");
+          toggleNoticeBtn.focus();
         } else {
           noticeDetails.classList.remove("hidden");
           toggleNoticeBtn.setAttribute("aria-expanded", "true");
+          const textBlock = noticeDetails.querySelector(".notice__text-block");
+          if (textBlock) textBlock.focus();
           announce("Información adicional desplegada");
         }
       });
