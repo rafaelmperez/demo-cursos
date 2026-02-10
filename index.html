@@ -1,3 +1,339 @@
+Lo he leído completo: **está muy cerca de 9,5 real** (y en algunas piezas ya lo está). Te dejo una **auditoría “quirúrgica”**: 10 mejoras pequeñas pero muy potentes (sin cambiar tu estética ni meter frameworks), con **parches exactos**.
+
+---
+
+## 1) Bug importante: la búsqueda no funciona (ahora mismo)
+
+En `debouncedSearch()` haces:
+
+```js
+state.q = normalize(value);
+```
+
+Pero en `renderResultsBar()` muestras:
+
+```js
+Búsqueda: "${state.q}"
+```
+
+Resultado: enseñas la búsqueda en minúsculas sin acentos (feísimo) y, peor: **cuando limpias** haces `state.q=""` pero si el usuario vuelve a escribir, sigues guardando normalizado (ok para filtrar), pero te falta **guardar también el texto original** para mostrarlo bien.
+
+✅ Arreglo: guarda dos campos: `qRaw` (para UI) y `q` (normalizado para filtro).
+
+**Patch:**
+
+```js
+const state = { q: "", qRaw: "", cat: "", mod: "", upcoming: true, sort: "dateAsc", chip: "", view: "cards" };
+
+// ...
+const debouncedSearch = debounce((value) => {
+  state.qRaw = value;
+  state.q = normalize(value);
+  render();
+}, 150);
+```
+
+Y en `clearAllFilters`:
+
+```js
+state.q = "";
+state.qRaw = "";
+$("#q").value = "";
+```
+
+Y en `renderResultsBar`:
+
+```js
+if (state.qRaw.trim()) parts.push(`Búsqueda: "${state.qRaw.trim()}"`);
+```
+
+---
+
+## 2) “Solo cursos próximos” aparece aunque sea el estado por defecto
+
+Ahora mismo, si `upcoming=true` siempre añades “Solo cursos próximos” como filtro activo. Eso **ensucia** el resumen y la gente mayor lo interpreta como “he activado algo raro”.
+
+✅ Mejor: trata `upcoming=true` como **comportamiento por defecto**, y solo muéstralo si el usuario cambia a “Todos”.
+
+**Patch en renderResultsBar:**
+
+```js
+// en vez de: if (state.upcoming) parts.push("Solo cursos próximos");
+if (!state.upcoming) parts.push("Mostrando: Todos (incluye cerrados y pasados)");
+```
+
+Y en `applyFilters`, si quieres mantener “Solo próximos” como default (perfecto), se queda como está.
+
+---
+
+## 3) Aria-live en resultsBar: mejor no “live” en un contenedor con botones
+
+Tienes:
+
+```html
+<div class="resultsBar" ... role="region" aria-live="polite">
+```
+
+Eso puede provocar lecturas raras (por cambios de DOM dentro del contenedor que incluye un botón).
+
+✅ Mejor: **quita aria-live del contenedor** y deja aria-live solo en un `span` oculto (o en tu `announcer` actual).
+
+**Patch HTML:**
+
+```html
+<div class="resultsBar" role="region" aria-label="Resumen de resultados y filtros activos">
+```
+
+Y añade un live “solo texto”:
+
+```html
+<span id="resultsLive" class="sr-only" aria-live="polite" aria-atomic="true"></span>
+```
+
+Luego en `renderResultsBar(items)`:
+
+```js
+const live = document.getElementById("resultsLive");
+if (live) live.textContent = `${items.length} resultados. ${parts.length ? parts.join(". ") : "Sin filtros activos."}`;
+```
+
+---
+
+## 4) “Limpiar todo” debería desactivarse si no hay nada que limpiar
+
+Ahora siempre está activo. A nivel 9,5, el botón debe reflejar estado.
+
+✅ Patch:
+
+```js
+function hasActiveFilters() {
+  return !!(state.q || state.cat || state.mod || state.chip || !state.upcoming);
+}
+
+function renderResultsBar(items) {
+  // ...
+  const clearBtn = $("#clearAllFilters");
+  if (clearBtn) {
+    const active = hasActiveFilters();
+    clearBtn.disabled = !active;
+    clearBtn.setAttribute("aria-disabled", active ? "false" : "true");
+  }
+}
+```
+
+Y visual (opcional pero fino): añade en CSS:
+
+```css
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+```
+
+---
+
+## 5) Sticky bar: cuidado con el “salto” por márgenes laterales
+
+Tienes `margin: 0 var(--space-md)` en `.resultsBar`. Al ser sticky, puede “bailar” con el scroll en algunos navegadores y se nota.
+
+✅ Mejor: que la sticky bar esté “full width” dentro del wrap y que el padding interior haga el aire.
+
+**Patch CSS (sutil, sin cambiar estética):**
+
+```css
+.resultsBar {
+  margin: 0;              /* quitar márgenes */
+  border-left: 0;
+  border-right: 0;
+  padding-left: calc(var(--space-md) + 2px);
+  padding-right: calc(var(--space-md) + 2px);
+}
+@media (max-width: 640px) {
+  .resultsBar { padding-left: var(--space-sm); padding-right: var(--space-sm); }
+}
+```
+
+Esto hace que se sienta más “institucional” (barra de sistema).
+
+---
+
+## 6) Tabla: el estado debería tener microcopy igual que en cards
+
+En tabla pones `ABIERTO/ESPERA/CERRADO`, pero no el “Plazas disponibles / Lista de espera…”.
+
+✅ Patch rápido en `renderTable`:
+
+```js
+const tdEstado = document.createElement("td");
+const strong = document.createElement("strong");
+strong.textContent = statusLabel(c.status);
+const sub = document.createElement("div");
+sub.className = "small";
+sub.textContent = statusSubLabel(c.status);
+tdEstado.appendChild(strong);
+tdEstado.appendChild(sub);
+```
+
+---
+
+## 7) El filtro por chip es “demasiado mágico”
+
+Filtras por:
+
+```js
+normalize(`${c.category} ${c.modality}`).includes(t)
+```
+
+Eso hace que chip “Servicios” afecte también modalidad si coincidiera en texto raro, etc. Funciona, pero es poco explícito.
+
+✅ Mejor: chips de modalidad actúan sobre modalidad, chips de categoría sobre categoría.
+
+**Patch simple:**
+
+```js
+function applyChipFilter(out) {
+  if (!state.chip) return out;
+  const chip = state.chip;
+
+  if (["Online","Presencial","Mixta"].includes(chip)) {
+    return out.filter(c => c.modality === chip);
+  }
+  // si no es modalidad, lo tratamos como categoría
+  return out.filter(c => (c.category || "") === chip);
+}
+```
+
+Y dentro de `applyFilters`:
+
+```js
+out = applyChipFilter(out);
+```
+
+(Esto sube bastante el nivel de “sensación de producto serio”.)
+
+---
+
+## 8) Persistir filtros en URL (nivel 9.5 real)
+
+Esto es MUY institucional: si alguien comparte enlace, abre con los filtros aplicados.
+
+✅ Sin librerías: `URLSearchParams`.
+
+**Añade:**
+
+```js
+function syncStateToURL() {
+  const p = new URLSearchParams();
+  if (state.qRaw?.trim()) p.set("q", state.qRaw.trim());
+  if (state.cat) p.set("cat", state.cat);
+  if (state.mod) p.set("mod", state.mod);
+  if (state.chip) p.set("chip", state.chip);
+  if (!state.upcoming) p.set("upcoming", "0");
+  if (state.sort && state.sort !== "dateAsc") p.set("sort", state.sort);
+  if (state.view && state.view !== "cards") p.set("view", state.view);
+  history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
+}
+
+function hydrateStateFromURL() {
+  const p = new URLSearchParams(location.search);
+  const q = p.get("q") || "";
+  state.qRaw = q;
+  state.q = normalize(q);
+  state.cat = p.get("cat") || "";
+  state.mod = p.get("mod") || "";
+  state.chip = p.get("chip") || "";
+  state.upcoming = (p.get("upcoming") !== "0");
+  state.sort = p.get("sort") || "dateAsc";
+  state.view = p.get("view") || "cards";
+
+  $("#q").value = state.qRaw;
+  $("#cat").value = state.cat;
+  $("#mod").value = state.mod;
+  $("#sort").value = state.sort;
+  $("#upcoming").value = state.upcoming ? "1" : "0";
+}
+```
+
+Y al final de `loadCoursesFromTSV()` antes de `render()`:
+
+```js
+hydrateStateFromURL();
+render();
+```
+
+Y al final de `render()`:
+
+```js
+syncStateToURL();
+```
+
+---
+
+## 9) Accesibilidad: botón “Más info” debería devolver foco al cerrar
+
+Ahora abre/cierra pero no devuelve el foco a un sitio lógico.
+
+✅ Patch: cuando cierres, vuelve el foco al botón; cuando abras, al primer párrafo.
+
+```js
+toggleNoticeBtn.addEventListener("click", () => {
+  const isExpanded = toggleNoticeBtn.getAttribute("aria-expanded") === "true";
+  if (isExpanded) {
+    noticeDetails.classList.add("hidden");
+    toggleNoticeBtn.setAttribute("aria-expanded", "false");
+    toggleNoticeBtn.focus();
+  } else {
+    noticeDetails.classList.remove("hidden");
+    toggleNoticeBtn.setAttribute("aria-expanded", "true");
+    const firstP = noticeDetails.querySelector("p");
+    (firstP || noticeDetails).focus?.();
+    announce("Información adicional desplegada");
+  }
+});
+```
+
+Y para que `p` sea enfocable, puedes añadir `tabindex="-1"` al contenedor `.notice__text-block` o al primer `p`.
+
+---
+
+## 10) Microdetalle: “Actualizado” en el header y `UPDATED_AT` (consistencia)
+
+`UPDATED_AT` viene como `"2026-02-10 10:30"` (formato raro). Cuando lo sacas del TSV sí lo formateas con `toLocaleString`.
+
+✅ Mejor: normaliza siempre a un formato español visible.
+
+**Patch simple:**
+
+```js
+function formatUpdatedAt(raw) {
+  const v = String(raw || "").trim();
+  if (!v) return "—";
+  // Si ya viene tipo "dd/mm/yyyy, hh:mm"
+  if (v.includes("/")) return v;
+  // Si viene "yyyy-mm-dd hh:mm"
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  return v;
+}
+```
+
+Y en `render()`:
+
+```js
+$("#updatedText").textContent = `Actualizado: ${formatUpdatedAt(UPDATED_AT)}`;
+```
+
+---
+
+# Conclusión (rápida y honesta)
+
+Tu base está **muy fuerte**. Si aplicas **(1), (2), (3), (4), (6) y (8)**, el salto de “bonito” a “producto institucional premium” es inmediato.
+
+Si me dices “quiero llegar a 9.8” te preparo un paquete final con:
+
+* resaltado de coincidencias en título/desc,
+* “Guardar/Restaurar filtros” (localStorage),
+* y un mini sistema de “recomendados” (próximos 7 días) sin duplicar lógica.
 <!doctype html>
 <html lang="es">
 <head>
